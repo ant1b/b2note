@@ -155,9 +155,12 @@ def readyQuerySetValuesForDumpAsJSONLD( o_in ):
                     o_out += ( readyQuerySetValuesForDumpAsJSONLD( item ), )
         elif type(o_in) is list or type(o_in) is set:
             o_out = []
-            for item in o_in:
-                if item and readyQuerySetValuesForDumpAsJSONLD( item ):
-                    o_out.append( readyQuerySetValuesForDumpAsJSONLD( item ) )
+            if len(o_in)==1:
+                o_out = o_in[0]
+            elif len(o_in)>1:
+                for item in o_in:
+                    if item and readyQuerySetValuesForDumpAsJSONLD( item ):
+                        o_out.append( readyQuerySetValuesForDumpAsJSONLD( item ) )
         elif type(o_in) is dict:
             o_out = {}
             for k in o_in.keys():

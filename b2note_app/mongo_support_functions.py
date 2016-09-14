@@ -1,9 +1,72 @@
 import re, datetime
 import json, bson
 
+from django.contrib.auth import get_user
+
 from .models import *
+from accounts.models import AnnotatorProfile
 
 import os, datetime, json
+
+
+
+def RetrieveAnnotations_perUsername( nickname=None ):
+    """
+      Function: RetrieveAnnotations_perUsername
+      ----------------------------
+        Retrieves all annotations having creator.nickname for a given file.
+
+        params:
+            subject_url (str): ID of the file.
+
+        returns:
+            dic: Dictionary with the values of the annotations.
+    """
+    try:
+
+        if nickname and isinstance(nickname, (str, unicode)):
+
+            annotations = Annotation.objects.raw_query({'creator.nickname': nickname})
+
+            #annotations = sorted(annotations, key=lambda Annotation: Annotation.created, reverse=True)
+
+            print "RetrieveAnnotations_perUsername function, returning annotations."
+            return annotations
+
+        else:
+
+            print "RetrieveAnnotations_perUsername function, provided nickname not valid:", nickname
+            return False
+
+    except Annotation.DoesNotExist:
+        "RetrieveAnnotations_perUsername function did not complete."
+        return False
+
+    print "RetrieveAnnotations_perUsername function did not complete succesfully."
+    return False
+
+
+def RetrieveAnnotations( subject_url ):
+    """
+      Function: RetrieveAnnotations
+      ----------------------------
+        Retrieves all annotations for a given file.
+
+        params:
+            subject_url (str): ID of the file.
+
+        returns:
+            dic: Dictionary with the values of the annotations.
+    """
+    try:
+        annotations = Annotation.objects.raw_query({'target.jsonld_id': subject_url})
+
+    except Annotation.DoesNotExist:
+        annotations = []
+
+    annotations = sorted(annotations, key=lambda Annotation: Annotation.created, reverse=True)
+
+    return annotations
 
 
 def DeleteFromPOSTinfo( db_id ):
@@ -11,16 +74,16 @@ def DeleteFromPOSTinfo( db_id ):
       Function: DeleteFromPOSTinfo
       ----------------------------
         Removes an annotation from MongoDB.
-        
+
         params:
             db_id (str): ID of the document to remove.
-        
+
         returns:
             bool: True if successful, False otherwise.
     """
     del_flag = False
     try:
-        if db_id and type(db_id) is unicode and len(db_id)>0:
+        if db_id and isinstance(db_id, (str, unicode)) and len(db_id)>0:
             Annotation.objects.get(id=db_id).delete()
             del_flag = True
         else:
@@ -36,16 +99,228 @@ def DeleteFromPOSTinfo( db_id ):
     return False
 
 
+def SetUserAsAnnotationCreator( user_id=None, db_id=None ):
+    """
+      Function: SetUserAsAnnotationCreator
+      ----------------------------
+        Sets annotator profile corresponding to user_id input parameter
+            as creator agent of annotation document with id matching db_id
+            input parameter.
+
+        params:
+            user_id (int): sqlite3 primary key of annotator profile model.
+            db_id (unicode): mongodb document id.
+
+        returns:
+            Annotation mongodb document id as unicode if succesful, False otherwise.
+    """
+    try:
+
+        if user_id and isinstance(user_id, int) and user_id>=0:
+
+            ap = None
+
+            ap = AnnotatorProfile.objects.using('users').get(annotator_id=user_id)
+
+            if ap and ap.nickname and isinstance(ap.nickname, (str, unicode)):
+
+                if db_id and isinstance(db_id, (str, unicode)):
+
+                    annotation = None
+
+                    annotation = Annotation.objects.get(id=db_id)
+
+                    if annotation:
+
+                        annotation.creator = [Agent(
+                            type = ['Human agent'],
+                            nickname = str(ap.nickname)
+                        )]
+                        annotation.save()
+
+                        print "User with nickname", str(ap.nickname) ,", set as annotation", annotation.id ,"creator"
+                        return annotation.id
+
+                    else:
+                        print "SetUserAsAnnotationCreator function, no annotation were found matching this id:", str(db_id)
+
+                else:
+                    print "SetUserAsAnnotationCreator function, provided parameter for annotation id invalid."
+
+            else:
+                print "SetUserAsAnnotationCreator function, no registered annotator profile with id:", user_id
+
+        else:
+            print "SetCurrentUserAsAnnotationCreator function, provided parameter for annotator profile id invalid."
+
+    except Exception:
+        print "SetUserAsAnnotationCreator function did not complete."
+        return False
+
+    print "SetUserAsAnnotationCreator function did not complete succesfully."
+    return False
+
+
+def CreateSemanticTag( subject_url, object_json ):
+    """
+      Function: CreateSemanticTag
+      ----------------------------
+        Creates an annotation in MongoDB.
+
+        params:
+            subject_url (str): URL of the annotation to create.
+            object_json (str): JSON of the annotation provided by SOLR
+
+        returns:
+            bool: True if successful, False otherwise.
+    """
+
+    try:
+        if subject_url and isinstance(subject_url, (str, unicode)):
+            my_id = None
+            my_id = CreateAnnotation(subject_url)
+
+            if my_id:
+                if object_json and isinstance(object_json, (str, unicode)):
+                    o = None
+                    o = json.loads(object_json)
+
+                    if o and isinstance(o, dict):
+                        if "uris" in o.keys():
+                            if o["uris"] and isinstance(o["uris"], (str, unicode)):
+                                object_uri   = ""
+                                object_label = ""
+                                object_uri = o["uris"]
+
+                                if "labels" in o.keys():
+                                    if o["labels"] and isinstance(o["labels"], (str, unicode)):
+                                        object_label = o["labels"]
+
+                                #print object_label, " ", object_uri
+
+                                annotation = None
+                                annotation = Annotation.objects.get(id=my_id)
+                                if annotation:
+                                    annotation.body = [TextualBody( jsonld_id = object_uri, type = ["TextualBody"], value = object_label )]
+                                    annotation.save()
+                                    print "Created semantic tag annotation"
+                                    return annotation.id
+                                else:
+                                    print "Could not retrieve from DB the annotation-basis with below id:"
+                                    print my_id
+                                    return False
+                            else:
+                                print "Dictionary field at key 'uris' does not resolve in a valid string."
+                                return False
+                        else:
+                            print "Dictionary does not contain a field with key 'uris'."
+                            return False
+                    else:
+                        print "Provided json does not load as a python dictionary."
+                        return False
+                else:
+                    print "Provided json object is neither string nor unicode."
+                    return False
+            else:
+                print "Internal call to CreateAnnotation function did not return an exploitable id reference."
+                return False
+        else:
+            print "Provided parameter is not a valid string for subject_url."
+            return False
+
+    except ValueError:
+        print "CreateSemanticTag function did not complete."
+        return False
+
+    print "CreateSemanticTag function did not complete succesfully."
+    return False
+
+
+
+
+def CreateFreeText( subject_url, text ):
+    """
+      Function: CreateFreeText
+      ----------------------------
+        Creates an annotation in MongoDB.
+
+        params:
+            subject_url (str): URL of the annotation to create.
+            text (str): Free text introduced by the user
+
+        returns:
+            bool: id of the document created, False otherwise.
+    """
+
+    try:
+        my_id = CreateAnnotation(subject_url)
+
+        if not my_id:
+            print "Could not save free text to DB"
+            return False
+
+        if isinstance(text, (str, unicode)) and len(text)>0:
+            annotation = Annotation.objects.get(id=my_id)
+            annotation.body = [TextualBody( type = ["TextualBody"], value = text )]
+            annotation.save()
+            print "Created free text annotation"
+            return annotation.id
+        else:
+            print "Wrong text codification or empty text"
+            return False
+
+    except ValueError:
+        print "CreateFreeText function did not complete."
+        return False
+
+    print "CreateFreeText function did not complete succesfully."
+    return False
+
+
+def CreateAnnotation(target):
+    """
+      Function: CreateAnnotation
+      ----------------------------
+        Creates an annotation in MongoDB.
+
+        params:
+            target (str): URL of the annotation to create.
+
+        returns:
+            int: id of the document created.
+    """
+    try:
+        if target and isinstance(target, (str, unicode)) and len(target)>0:
+            ann = Annotation(
+                jsonld_context  = ["http://www.w3.org/ns/anno.jsonld"],
+                type         = ["Annotation"],
+                target       = [ExternalResource( jsonld_id = target )]
+                )
+            ann.save()
+            ann = Annotation.objects.get(id=ann.id)
+            ann.jsonld_id = "https://b2note.bsc.es/annotation/" + ann.id
+            ann.save()
+            print "CreateAnnotation with id: " + str(ann.id)
+            return ann.id
+        else:
+            print "Bad target for CreateAnnotation"
+            return False
+
+    except ValueError:
+        print "Could not save to DB"
+        return False
+
+
 def CreateFromPOSTinfo( subject_url, object_json ):
     """
       Function: CreateFromPOSTinfo
       ----------------------------
         Creates an annotation in MongoDB.
-        
+
         params:
             subject_url (str): URL of the annotation to create.
             object_json (str): JSON of the annotation provided by SOLR
-        
+
         returns:
             bool: True if successful, False otherwise.
     """
@@ -54,7 +329,7 @@ def CreateFromPOSTinfo( subject_url, object_json ):
 
     try:
 
-        if subject_url and type(subject_url) is unicode and len(subject_url)>0:
+        if subject_url and isinstance(subject_url, (str, unicode)) and len(subject_url)>0:
 
             o = json.loads(object_json)
 
@@ -102,8 +377,7 @@ def CreateFromPOSTinfo( subject_url, object_json ):
                     jsonld_context  = ["http://www.w3.org/ns/anno.jsonld"],
                     jsonld_id       = "https://b2note.bsc.es/annotation/temporary_id",
                     type            = ["Annotation"],
-                    target          = [ExternalResource( jsonld_id = subject_url, language = ["en"] )],
-                    body            = [TextualBody(jsonld_id=object_uri, type=["TextualBody"], value=object_label)]
+                    target          = [ExternalResource( jsonld_id = subject_url )]
                 ).save()
 
                 anns = Annotation.objects.filter( jsonld_id = "https://b2note.bsc.es/annotation/temporary_id" )
@@ -155,12 +429,9 @@ def readyQuerySetValuesForDumpAsJSONLD( o_in ):
                     o_out += ( readyQuerySetValuesForDumpAsJSONLD( item ), )
         elif type(o_in) is list or type(o_in) is set:
             o_out = []
-            if len(o_in)==1:
-                o_out = o_in[0]
-            elif len(o_in)>1:
-                for item in o_in:
-                    if item and readyQuerySetValuesForDumpAsJSONLD( item ):
-                        o_out.append( readyQuerySetValuesForDumpAsJSONLD( item ) )
+            for item in o_in:
+                if item and readyQuerySetValuesForDumpAsJSONLD( item ):
+                    o_out.append( readyQuerySetValuesForDumpAsJSONLD( item ) )
         elif type(o_in) is dict:
             o_out = {}
             for k in o_in.keys():
